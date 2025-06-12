@@ -1,0 +1,6 @@
+﻿Bài tập 1: Sử dụng Python Selenium để code:
+1. Truy cập https://www.saucedemo.com
+* Đăng nhập lần lượt cho tất cả username, password và nhấn Login.
+* Sau khi đăng nhập thành công thì lấy tên và giá của tất cả sản phẩm lưu vào file excel bằng pandas.
+2. Truy cập https://thuvienphapluat.vn/ma-so-thue/tra-cuu-ma-so-thue-doanh-nghiep 
+* Thu thập tên doanh nghiệp, mã số thuế, ngày cấp của tất cả các trang rồi lưu vào excel bằng pandas, mỗi trang là một sheet.
