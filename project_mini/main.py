@@ -1,7 +1,10 @@
+# from curses import echo
 import os
+from this import d
 import time
 import glob
 import logging
+import xmltodict
 import pandas as pd
 from selenium import webdriver
 import xml.etree.ElementTree as ET
@@ -71,21 +74,23 @@ def xu_ly_file_input(file_path):
   df = df[['Mã số thuế', 'Mã tra cứu', 'URL']].fillna('')
   
   ket_qua = []
+  # bảng ánh xạ domain -> (hàm cần xử lý, cần_mst)
+  url_handler = [
+    ('tracuuhoadon.fpt.com.vn', lambda mst, matc, url: xu_ly_fpt(mst, matc, url), True),
+    ('meinvoice.vn', lambda mst, matc, url: xu_ly_meinvoice(matc, url), False),
+    ('van.ehoadon.vn', lambda mst, matc, url: xu_ly_ehoadon(matc), False)
+  ]
+  
 
   for _, row in df.iterrows():
     mst = str(row['Mã số thuế']).strip()
     matc = str(row['Mã tra cứu']).strip()
-    url = row['URL'].strip().lower()
+    url = str(row.get('URL', '')).strip().lower()
 
-    if "tracuuhoadon.fpt.com.vn" in url:
-      ket_qua.append(xu_ly_fpt(mst, matc, url))
-
-    elif "meinvoice.vn" in url:
-      ket_qua.append(xu_ly_meinvoice(matc, url))
-
-    elif "van.ehoadon.vn" in url:
-      ket_qua.append(xu_ly_ehoadon(matc))
-
+    for domain, handler, need_mst in url_handler:
+      if domain in url:
+        ket_qua.append(handler(mst, matc, url))
+        break
     else:
       ket_qua.append({
         'Loại': 'Không xác định',
@@ -381,58 +386,69 @@ def xu_ly_dong_trinh_duyet(driver):
 def xu_ly_doc_file_xml(xml_path):
   """Đọc nội dung file XML hóa đơn"""
   try:
-    tree = ET.parse(xml_path)
-    root = tree.getroot()
-    return root
+    with open(xml_path, 'r', encoding='utf-8') as file:
+      data_dict = xmltodict.parse(file.read())
+    print(data_dict.keys())
+    return data_dict
   except Exception as e:
-    print(f"Lỗi khi đọc file XML: {e}")
+    logging.error(f"Lỗi khi đọc file XML: {e}")
     return None
 
-def xu_ly_trich_xuat_thong_tin(root, loai):
-  """Trích xuất thông tin từ file XML theo từng loại"""
-  def get_text(path):
-    el = root.find(path)
-    return el.text.strip() if el is not None and el.text else ''
+def xu_ly_trich_xuat_thong_tin(root_dict, loai):
+    """Trích xuất thông tin từ file XML theo từng loại"""
 
-  if loai == 'FPT':
-    return {
-      'Số hóa đơn': get_text('.//DLHDon/TTChung/SHDon'),
-      'Đơn vị bán hàng': get_text('.//DLHDon/NDHDon/NBan/Ten'),
-      'Mã số thuế bán': get_text('.//DLHDon/NDHDon/NBan/MST'),
-      'Địa chỉ bán': get_text('.//DLHDon/NDHDon/NBan/DChi'),
-      'Số tài khoản bán': '',  # Không tồn tại trong XML
-      'Họ tên người mua hàng': get_text('.//DLHDon/NDHDon/NMua/HVTNMHang'),
-      'Địa chỉ mua': get_text('.//DLHDon/NDHDon/NMua/DChi'),
-      'Mã số thuế mua': get_text('.//DLHDon/NDHDon/NMua/MST')
-    }
-  elif loai == 'MeInvoice':
-    return {
-      'Số hóa đơn': get_text('.//SHDon'),
-      'Đơn vị bán hàng': get_text('.//NBan/Ten'),
-      'Mã số thuế bán': get_text('.//NBan/MST'),
-      'Địa chỉ bán': get_text('.//NBan/DChi'),
-      'Số tài khoản bán': get_text('.//NBan/STKNHang'),
-      'Họ tên người mua hàng': get_text('.//NMua/Ten'),
-      'Địa chỉ mua': get_text('.//NMua/DChi'),
-      'Mã số thuế mua': get_text('.//NMua/MST')
-    }
-  elif loai == 'eHoadon':
-    return {
-      "Số hóa đơn": get_text(".//SHDon"),
-      "Đơn vị bán hàng": get_text(".//NBan/Ten"),
-      "Mã số thuế bán": get_text(".//NBan/MST"),
-      "Địa chỉ bán": get_text(".//NBan/DChi"),
-      "Số tài khoản bán": '',
-      "Họ tên người mua hàng": get_text(".//NMua/Ten"),
-      "Địa chỉ mua": get_text(".//NMua/DChi"),
-      "Mã số thuế mua": get_text(".//NMua/MST"),
-    }
-  else:
-    # Trường hợp không xác định
-    return {k: "" for k in [
-      'Số hóa đơn', 'Đơn vị bán hàng', 'Mã số thuế bán', 'Địa chỉ bán',
-      'Số tài khoản bán', 'Họ tên người mua hàng', 'Địa chỉ mua', 'Mã số thuế mua'
-    ]}
+    def get_text(data, path):
+        keys = [k for k in path.strip().split('/') if k and k != '.']
+        for k in keys:
+            if isinstance(data, dict) and k in data:
+                data = data[k]
+            else:
+                return ''
+        return data.strip() if isinstance(data, str) else ''
+
+    if loai == 'FPT':
+      #lấy phần gốc từ xml :
+        dlhdon_fpt = root_dict['TDiep']['DLieu']['HDon']['DLHDon']
+        return {
+            'Số hóa đơn': get_text(dlhdon_fpt, 'TTChung/SHDon'),
+            'Đơn vị bán hàng': get_text(dlhdon_fpt, 'NDHDon/NBan/Ten'),
+            'Mã số thuế bán': get_text(dlhdon_fpt, 'NDHDon/NBan/MST'),
+            'Địa chỉ bán': get_text(dlhdon_fpt, 'NDHDon/NBan/DChi'),
+            'Số tài khoản bán': '',  # Không tồn tại trong XML
+            'Họ tên người mua hàng': get_text(dlhdon_fpt, 'NDHDon/NMua/HVTNMHang'),
+            'Địa chỉ mua': get_text(dlhdon_fpt, 'NDHDon/NMua/DChi'),
+            'Mã số thuế mua': get_text(dlhdon_fpt, 'NDHDon/NMua/MST')
+        }
+    elif loai == 'MeInvoice':
+        dlhdon_meinvoice = root_dict['HDon']['DLHDon']
+        return {
+            'Số hóa đơn': get_text(dlhdon_meinvoice, 'TTChung/SHDon'),
+            'Đơn vị bán hàng': get_text(dlhdon_meinvoice, 'NDHDon/NBan/Ten'),
+            'Mã số thuế bán': get_text(dlhdon_meinvoice, 'NDHDon/NBan/MST'),
+            'Địa chỉ bán': get_text(dlhdon_meinvoice, 'NDHDon/NBan/DChi'),
+            'Số tài khoản bán': get_text(dlhdon_meinvoice, 'NDHDon/NBan/STKNHang'),  
+            'Họ tên người mua hàng': get_text(dlhdon_meinvoice, 'NDHDon/NMua/Ten'),
+            'Địa chỉ mua': get_text(dlhdon_meinvoice, 'NDHDon/NMua/DChi'),
+            'Mã số thuế mua': get_text(dlhdon_meinvoice, 'NDHDon/NMua/MST')
+        }
+    elif loai == 'eHoadon':
+        dlhdon_ehoadon = root_dict['HDon']['DLHDon']
+        return {
+            "Số hóa đơn": get_text(dlhdon_ehoadon, "TTChung/SHDon"),
+            "Đơn vị bán hàng": get_text(dlhdon_ehoadon, "NDHDon/NBan/Ten"),
+            "Mã số thuế bán": get_text(dlhdon_ehoadon, "NDHDon/NBan/MST"),
+            "Địa chỉ bán": get_text(dlhdon_ehoadon, "NDHDon/NBan/DChi"),
+            "Số tài khoản bán": '',
+            "Họ tên người mua hàng": get_text(dlhdon_ehoadon, "NDHDon/NMua/Ten"),
+            "Địa chỉ mua": get_text(dlhdon_ehoadon, "NDHDon/NMua/DChi"),
+            "Mã số thuế mua": get_text(dlhdon_ehoadon, "NDHDon/NMua/MST")
+        }
+    else:
+        # Trường hợp không xác định
+        return {k: "" for k in [
+            'Số hóa đơn', 'Đơn vị bán hàng', 'Mã số thuế bán', 'Địa chỉ bán',
+            'Số tài khoản bán', 'Họ tên người mua hàng', 'Địa chỉ mua', 'Mã số thuế mua'
+        ]}
 
 def main():
   setup_logging() 
@@ -443,7 +459,8 @@ def main():
 
   # Xóa các file xml cũ trong thư mục downloads để bắt đầu phiên làm việc mới
   if os.path.exists(download_dir):
-    for f in glob.glob(os.path.join(download_dir, "*.xml")):
+    xml_file_dict = glob.glob(os.path.join(download_dir, "*.xml"))
+    for f in xml_file_dict:
       try:
         os.remove(f)
       except OSError as e:
